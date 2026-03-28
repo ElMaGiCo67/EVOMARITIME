@@ -1,155 +1,139 @@
 /**
- * GOOGLE MAPS FRONTEND INTEGRATION - ESSENTIAL GUIDE
- *
- * USAGE FROM PARENT COMPONENT:
- * ======
- *
- * const mapRef = useRef<google.maps.Map | null>(null);
- *
- * <MapView
- *   initialCenter={{ lat: 40.7128, lng: -74.0060 }}
- *   initialZoom={15}
- *   onMapReady={(map) => {
- *     mapRef.current = map; // Store to control map from parent anytime, google map itself is in charge of the re-rendering, not react state.
- * </MapView>
- *
- * ======
- * Available Libraries and Core Features:
- * -------------------------------
- * 📍 MARKER (from `marker` library)
- * - Attaches to map using { map, position }
- * new google.maps.marker.AdvancedMarkerElement({
- *   map,
- *   position: { lat: 37.7749, lng: -122.4194 },
- *   title: "San Francisco",
- * });
- *
- * -------------------------------
- * 🏢 PLACES (from `places` library)
- * - Does not attach directly to map; use data with your map manually.
- * const place = new google.maps.places.Place({ id: PLACE_ID });
- * await place.fetchFields({ fields: ["displayName", "location"] });
- * map.setCenter(place.location);
- * new google.maps.marker.AdvancedMarkerElement({ map, position: place.location });
- *
- * -------------------------------
- * 🧭 GEOCODER (from `geocoding` library)
- * - Standalone service; manually apply results to map.
- * const geocoder = new google.maps.Geocoder();
- * geocoder.geocode({ address: "New York" }, (results, status) => {
- *   if (status === "OK" && results[0]) {
- *     map.setCenter(results[0].geometry.location);
- *     new google.maps.marker.AdvancedMarkerElement({
- *       map,
- *       position: results[0].geometry.location,
- *     });
- *   }
- * });
- *
- * -------------------------------
- * 📐 GEOMETRY (from `geometry` library)
- * - Pure utility functions; not attached to map.
- * const dist = google.maps.geometry.spherical.computeDistanceBetween(p1, p2);
- *
- * -------------------------------
- * 🛣️ ROUTES (from `routes` library)
- * - Combines DirectionsService (standalone) + DirectionsRenderer (map-attached)
- * const directionsService = new google.maps.DirectionsService();
- * const directionsRenderer = new google.maps.DirectionsRenderer({ map });
- * directionsService.route(
- *   { origin, destination, travelMode: "DRIVING" },
- *   (res, status) => status === "OK" && directionsRenderer.setDirections(res)
- * );
- *
- * -------------------------------
- * 🌦️ MAP LAYERS (attach directly to map)
- * - new google.maps.TrafficLayer().setMap(map);
- * - new google.maps.TransitLayer().setMap(map);
- * - new google.maps.BicyclingLayer().setMap(map);
- *
- * -------------------------------
- * ✅ SUMMARY
- * - “map-attached” → AdvancedMarkerElement, DirectionsRenderer, Layers.
- * - “standalone” → Geocoder, DirectionsService, DistanceMatrixService, ElevationService.
- * - “data-only” → Place, Geometry utilities.
+ * Leaflet Map Component — drop-in replacement for the Google Maps version.
+ * Uses OpenStreetMap tiles (free, no API key required).
+ * Dark tile layer from CartoDB to match the site's dark theme.
  */
-
-/// <reference types="@types/google.maps" />
-
 import { useEffect, useRef } from "react";
-import { usePersistFn } from "@/hooks/usePersistFn";
 import { cn } from "@/lib/utils";
 
 declare global {
   interface Window {
-    google?: typeof google;
+    L?: any;
   }
 }
 
-const API_KEY = import.meta.env.VITE_FRONTEND_FORGE_API_KEY;
-const FORGE_BASE_URL =
-  import.meta.env.VITE_FRONTEND_FORGE_API_URL ||
-  "https://forge.butterfly-effect.dev";
-const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
+let leafletLoaded: Promise<void> | null = null;
 
-function loadMapScript() {
-  return new Promise(resolve => {
+function loadLeaflet(): Promise<void> {
+  if (window.L) return Promise.resolve();
+  if (leafletLoaded) return leafletLoaded;
+
+  leafletLoaded = new Promise((resolve, reject) => {
+    // Load CSS
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(link);
+
+    // Load JS
     const script = document.createElement("script");
-    script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry`;
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
     script.async = true;
-    script.crossOrigin = "anonymous";
-    script.onload = () => {
-      resolve(null);
-      script.remove(); // Clean up immediately
-    };
-    script.onerror = () => {
-      console.error("Failed to load Google Maps script");
-    };
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Leaflet"));
     document.head.appendChild(script);
   });
+
+  return leafletLoaded;
+}
+
+export interface LeafletMap {
+  panTo: (lat: number, lng: number) => void;
+  setZoom: (zoom: number) => void;
+  setView: (lat: number, lng: number, zoom: number) => void;
+  addMarker: (lat: number, lng: number, opts?: { title?: string; html?: string; onClick?: () => void }) => any;
+  removeMarker: (marker: any) => void;
+  raw: any; // underlying L.map instance
 }
 
 interface MapViewProps {
   className?: string;
-  initialCenter?: google.maps.LatLngLiteral;
+  initialCenter?: { lat: number; lng: number };
   initialZoom?: number;
-  onMapReady?: (map: google.maps.Map) => void;
+  onMapReady?: (map: LeafletMap) => void;
 }
 
 export function MapView({
   className,
-  initialCenter = { lat: 37.7749, lng: -122.4194 },
-  initialZoom = 12,
+  initialCenter = { lat: 43.5, lng: 22 },
+  initialZoom = 6,
   onMapReady,
 }: MapViewProps) {
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<google.maps.Map | null>(null);
-
-  const init = usePersistFn(async () => {
-    await loadMapScript();
-    if (!mapContainer.current) {
-      console.error("Map container not found");
-      return;
-    }
-    map.current = new window.google.maps.Map(mapContainer.current, {
-      zoom: initialZoom,
-      center: initialCenter,
-      mapTypeControl: false,
-      fullscreenControl: false,
-      zoomControl: true,
-      streetViewControl: false,
-      // NOTE: mapId intentionally omitted — custom styles via setOptions({ styles }) require no mapId
-    });
-    if (onMapReady) {
-      onMapReady(map.current);
-    }
-  });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
 
   useEffect(() => {
-    init();
-  }, [init]);
+    let cancelled = false;
+
+    loadLeaflet().then(() => {
+      if (cancelled || !containerRef.current || mapInstanceRef.current) return;
+
+      const L = window.L;
+      const map = L.map(containerRef.current, {
+        center: [initialCenter.lat, initialCenter.lng],
+        zoom: initialZoom,
+        zoomControl: true,
+        attributionControl: false,
+      });
+
+      // Dark tile layer from CartoDB
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        {
+          subdomains: "abcd",
+          maxZoom: 19,
+        }
+      ).addTo(map);
+
+      mapInstanceRef.current = map;
+
+      // Build wrapper
+      const wrapper: LeafletMap = {
+        panTo: (lat, lng) => map.panTo([lat, lng]),
+        setZoom: (z) => map.setZoom(z),
+        setView: (lat, lng, z) => map.setView([lat, lng], z),
+        addMarker: (lat, lng, opts) => {
+          const markerOpts: any = {};
+          if (opts?.html) {
+            markerOpts.icon = L.divIcon({
+              html: opts.html,
+              className: "evo-custom-marker",
+              iconSize: [36, 36],
+              iconAnchor: [18, 36],
+            });
+          }
+          const marker = L.marker([lat, lng], markerOpts).addTo(map);
+          if (opts?.title) marker.bindTooltip(opts.title);
+          if (opts?.onClick) marker.on("click", opts.onClick);
+          return marker;
+        },
+        removeMarker: (marker) => {
+          if (marker) map.removeLayer(marker);
+        },
+        raw: map,
+      };
+
+      if (onMapReady) onMapReady(wrapper);
+    });
+
+    return () => {
+      cancelled = true;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, []);
 
   return (
-    <div ref={mapContainer} className={cn("w-full h-[500px]", className)} />
+    <>
+      <style>{`
+        .evo-custom-marker {
+          background: transparent !important;
+          border: none !important;
+        }
+      `}</style>
+      <div ref={containerRef} className={cn("w-full h-[500px]", className)} />
+    </>
   );
 }
