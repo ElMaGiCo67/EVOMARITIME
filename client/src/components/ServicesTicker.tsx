@@ -30,9 +30,12 @@ export default function ServicesTicker() {
         borderBottom: "1px solid oklch(0.82 0.18 200 / 20%)",
       }}
     >
-      <div className="ticker-track flex items-center gap-0 whitespace-nowrap">
+      <div
+        className="ticker-track flex items-center gap-0 whitespace-nowrap"
+        style={{ width: "max-content", minWidth: "max-content" }}
+      >
         {doubled.map((item, i) => (
-          <span key={i} className="flex items-center">
+          <span key={i} className="flex items-center" style={{ minWidth: "max-content" }}>
             <span
               className="px-6"
               style={{
